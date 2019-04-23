@@ -119,6 +119,8 @@ PENNCONF conftable[] = {
    sizeof options.guest_file[1], 0, "messages"},
   {"who_html_file", cf_str, options.who_file[1], sizeof options.who_file[1], 0,
    "messages"},
+  {"index_html_file", cf_str, options.index_html, sizeof options.index_html, 0,
+   "messages"},
 
   {"player_start", cf_dbref, &options.player_start, 100000, 0, "db"},
   {"master_room", cf_dbref, &options.master_room, 100000, 0, "db"},
@@ -322,6 +324,8 @@ PENNCONF conftable[] = {
 #ifdef HAVE_SSL
   {"ssl_private_key_file", cf_str, options.ssl_private_key_file,
    sizeof options.ssl_private_key_file, 0, "files"},
+  {"ssl_certificate_file", cf_str, options.ssl_certificate_file,
+   sizeof options.ssl_certificate_file, 0, "files"},
   {"ssl_ca_file", cf_str, options.ssl_ca_file, sizeof options.ssl_ca_file, 0,
    "files"},
   {"ssl_ca_dir", cf_str, options.ssl_ca_dir, sizeof options.ssl_ca_dir, 0,
@@ -1332,6 +1336,7 @@ conf_default_set(void)
   options.read_remote_desc = 0;
 #ifdef HAVE_SSL
   strcpy(options.ssl_private_key_file, "");
+  strcpy(options.ssl_certificate_file, "");
   strcpy(options.ssl_ca_file, "");
   strcpy(options.ssl_ca_dir, "");
   options.ssl_require_client_cert = 0;

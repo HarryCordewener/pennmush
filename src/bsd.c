@@ -52,6 +52,9 @@
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
+#ifdef HAVE_SYS_FILE_H
+#include <sys/file.h>
+#endif
 #ifdef HAVE_SYS_UIO_H
 #include <sys/uio.h>
 #endif
@@ -382,6 +385,7 @@ struct fcache_entries {
   FBLOCK full_fcache[2];     /**< full.txt and full.html */
   FBLOCK guest_fcache[2];    /**< guest.txt and guest.html */
   FBLOCK who_fcache[2];      /**< textfiles to override connect screen WHO */
+  FBLOCK index_fcache;         /**< default HTTP landing page */
 };
 
 static struct fcache_entries fcache;
@@ -471,6 +475,7 @@ void load_reboot_db(void);
 
 static bool in_suid_root_mode __attribute__((__unused__)) = 0;
 static char *pidfile = NULL;
+static int pidfile_fd = -1;
 static char **saved_argv = NULL;
 
 int file_watch_init(void);
@@ -555,11 +560,24 @@ main(int argc, char **argv)
           detach_session = 0;
         else if (strcmp(argv[n], "--disable-socket-quota") == 0) {
           disable_socket_quota = true;
+        } else if (strncmp(argv[n], "--pidfile-fd", 12) == 0) {
+          char *eq;
+          if ((eq = strchr(argv[n], '='))) {
+            pidfile_fd = atoi(eq + 1);
+          } else {
+            if (n + 1 >= argc) {
+              fprintf(stderr, "%s: --pidfile-fd needs a file descriptor.\n",
+                      argv[0]);
+              return EXIT_FAILURE;
+            }
+            pidfile_fd = atoi(argv[n + 1]);
+            n++;
+          }
         } else if (strncmp(argv[n], "--pid-file", 10) == 0) {
           char *eq;
-          if ((eq = strchr(argv[n], '=')))
+          if ((eq = strchr(argv[n], '='))) {
             pidfile = eq + 1;
-          else {
+          } else {
             if (n + 1 >= argc) {
               fprintf(stderr, "%s: --pid-file needs a filename.\n", argv[0]);
               return EXIT_FAILURE;
@@ -606,15 +624,60 @@ main(int argc, char **argv)
 #endif
 
 #ifdef HAVE_GETPID
-  if (pidfile) {
+  /* Acquire a lock on the pidfile if needed. */
+  if (pidfile && pidfile_fd == -1) {
+#ifdef HAVE_FLOCK
+    char mypid[16];
+    int pidlen;
+    pidfile_fd =
+      open(pidfile, O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    if (pidfile_fd < 0) {
+      fprintf(stderr, "%s: Unable to create pidfile '%s': %s\n", argv[0],
+              pidfile, strerror(errno));
+      return EXIT_FAILURE;
+    }
+
+    /* Now attempt to acquire a lock on the file. Use flock(2) instead
+       of the fcntl(2) locks used elsewhere because its semantics are
+       a better fit for reboots and so it can be used with the Linux-utils
+       flock(1) program. */
+    if (flock(pidfile_fd, LOCK_EX | LOCK_NB) < 0) {
+      if (errno == EWOULDBLOCK) {
+        fprintf(stderr,
+                "%s: Unable to acquire lock on pidfile '%s'. Another instance "
+                "of the game is running.\n",
+                argv[0], pidfile);
+      } else {
+        fprintf(stderr, "%s: Unable to acquire lock on pidfile '%s': %s\n",
+                argv[0], pidfile, strerror(errno));
+      }
+      return EXIT_FAILURE;
+    }
+
+    /* And write the current pid */
+    pidlen = snprintf(mypid, sizeof mypid, "%d\n", (int) getpid());
+    if (ftruncate(pidfile_fd, 0) < 0) {
+      fprintf(stderr, "%s: Unable to update pidfile '%s': %s\n", argv[0],
+              pidfile, strerror(errno));
+      remove(pidfile);
+      return EXIT_FAILURE;
+    }
+    if (write(pidfile_fd, mypid, pidlen) != pidlen) {
+      fprintf(stderr, "%s: Unable to update pidfile '%s': %s\n", argv[0],
+              pidfile, strerror(errno));
+      remove(pidfile);
+      return EXIT_FAILURE;
+    }
+#else
     FILE *f;
     if (!(f = fopen(pidfile, "w"))) {
       fprintf(stderr, "%s: Unable to write to pidfile '%s'\n", argv[0],
               pidfile);
       return EXIT_FAILURE;
     }
-    fprintf(f, "%d\n", getpid());
+    fprintf(f, "%d\n", (int) getpid());
     fclose(f);
+#endif
   }
 #endif
 
@@ -820,8 +883,12 @@ main(int argc, char **argv)
   curl_global_cleanup();
 #endif
 
-  if (pidfile)
+  if (pidfile) {
     remove(pidfile);
+  }
+  if (pidfile_fd != -1) {
+    close(pidfile_fd);
+  }
 
 #ifdef WIN32SERVICES
   /* Keep service manager happy */
@@ -924,7 +991,10 @@ update_quotas(struct timeval current)
   last = current;
 
   DESC_ITER (d) {
-    d->quota += COMMANDS_PER_SECOND * msecs;
+    if (d->conn_flags & CONN_NOQUOTA)
+      d->quota = QUOTA_MAX;
+    else
+      d->quota += COMMANDS_PER_SECOND * msecs;
     if (d->quota > QUOTA_MAX)
       d->quota = QUOTA_MAX;
   }
@@ -2056,6 +2126,8 @@ fcache_read_one(const char *filename)
       hash_add(&lookup, options.guest_file[i], &fcache.guest_fcache[i]);
       hash_add(&lookup, options.who_file[i], &fcache.who_fcache[i]);
     }
+    
+    hash_add(&lookup, options.index_html, &fcache.index_fcache);
   }
 
   fb = hashfind(filename, &lookup);
@@ -2072,7 +2144,7 @@ fcache_read_one(const char *filename)
 void
 fcache_load(dbref player)
 {
-  int conn, motd, wiz, new, reg, quit, down, full;
+  int conn, motd, wiz, new, reg, quit, down, full, index;
   int guest, who;
   int i;
 
@@ -2087,14 +2159,18 @@ fcache_load(dbref player)
     full = fcache_read(&fcache.full_fcache[i], options.full_file[i]);
     guest = fcache_read(&fcache.guest_fcache[i], options.guest_file[i]);
     who = fcache_read(&fcache.who_fcache[i], options.who_file[i]);
+    
+    if (i == 0) {
+      index = fcache_read(&fcache.index_fcache, options.index_html);
+    }
 
     if (player != NOTHING) {
       notify_format(player,
-                    T("%s sizes:  NewUser...%d  Connect...%d  "
+                    T("%s sizes:  Index...%d  NewUser...%d  Connect...%d  "
                       "Guest...%d  Motd...%d  Wizmotd...%d  Quit...%d  "
                       "Register...%d  Down...%d  Full...%d  Who...%d"),
-                    i ? "HTMLFile" : "File", new, conn, guest, motd, wiz, quit,
-                    reg, down, full, who);
+                    i ? "HTMLFile" : "File", index, new, conn, guest, motd,
+                      wiz, quit, reg, down, full, who);
     }
   }
 }
@@ -3019,7 +3095,7 @@ GMCP_HANDLER(gmcp_softcode_example)
   queue_attribute_base_priv(obj, attrname, d->player, 1, pe_regs, QUEUE_DEFAULT,
                             NOTHING, NULL, NULL);
   pe_regs_free(pe_regs);
-  
+
   return 1;
 }
 
@@ -3113,13 +3189,13 @@ FUNCTION(fun_oob)
       }
     }
   } while (l && *l && (p = next_in_list(&l)));
-  
+
   if (failed && i < 1) {
     safe_str("#-1 NO VALID PLAYERS", buff, bp);
   } else {
     safe_integer(i, buff, bp);
   }
-  
+
   cJSON_Delete(json);
 }
 
@@ -3561,12 +3637,38 @@ http_bounce_mud_url(DESC *d)
   char buf[BUFFER_LEN];
   char *bp = buf;
   bool has_url = strncmp(MUDURL, "http", 4) == 0;
+  FBLOCK *index = &fcache.index_fcache;
+  
+  /* Setup the return headers. */
   safe_format(buf, &bp,
               "HTTP/1.1 200 OK\r\n"
               "Content-Type: text/html; charset:iso-8859-1\r\n"
               "Pragma: no-cache\r\n"
               "Connection: Close\r\n"
-              "\r\n"
+              "\r\n");
+  
+  /* See if we've got a cached index.html file and use that. */
+  if (index && index->buff) {
+    *bp = '\0';
+    
+    /* Check for an attribute override. */
+    if (index->thing != NOTHING) {
+      if (fcache_dump_attr(d, index->thing, (char *) index->buff, 1, buf, NULL) == 1) {
+        /* Attr successfully evaluated and displayed */
+        return;
+      }
+    } else {
+      /* Output static text from the cached file */
+      queue_newwrite(d, buf, strlen(buf));
+      queue_eol(d);
+      queue_write(d, index->buff, index->len);
+      return;
+    }
+    
+  }
+  
+  /* Show the default landing page with embedded MUDURL. */
+  safe_format(buf, &bp,
               "<!DOCTYPE html>\r\n"
               "<HTML><HEAD>"
               "<TITLE>Welcome to %s!</TITLE>",
@@ -4912,7 +5014,19 @@ sockset(DESC *d, char *name, char *val)
       return T("Accents will not be stripped.");
     }
   }
-
+  if (!strcasecmp(name, "NOQUOTA")) {
+    ival = isyes(val);
+    if (!GoodObject(d->player) || !Wizard(d->player)) {
+      return T("Only Wizards can set this option.");
+    }
+    if (ival) {
+      d->conn_flags |= CONN_NOQUOTA;
+      return T("NOQUOTA turned on. Command quota is now ignored.");
+    } else {
+      d->conn_flags &= ~CONN_NOQUOTA;
+      return T("NOQUOTA turned off. Command quota will be respected.");
+    }
+  }
   snprintf(retval, BUFFER_LEN, T("@sockset option '%s' is not a valid option."),
            name);
   return retval;
@@ -5412,7 +5526,7 @@ dump_users(DESC *call_by, char *match)
     if (nlen < 16)
       safe_fill(' ', 16 - nlen, nbuff, &np);
     *np = '\0';
-    snprintf(tbuf, sizeof tbuf, "%16.16s %10.10s %6.6s%c %s", nbuff,
+    snprintf(tbuf, sizeof tbuf, "%s %10.10s %6.6s%c %s", nbuff,
              onfor_time_fmt(d->connected_at, 10),
              idle_time_fmt(d->last_time, 4), (Dark(d->player) ? 'D' : ' '),
              get_doing(d->player, NOTHING, NOTHING, NULL, 0));
@@ -7563,14 +7677,23 @@ do_reboot(dbref player, int flag)
   end_all_logs();
 #ifndef WIN32
   {
-    const char *args[6];
+    const char *args[8];
     int n = 0;
+    char fd_str[16];
 
     args[n++] = saved_argv[0];
     args[n++] = "--no-session";
     if (pidfile) {
       args[n++] = "--pid-file";
       args[n++] = pidfile;
+    }
+    if (pidfile_fd != -1) {
+      snprintf(fd_str, sizeof fd_str, "%d", pidfile_fd);
+      args[n++] = "--pidfile-fd";
+      args[n++] = fd_str;
+    }
+    if (disable_socket_quota) {
+      args[n++] = "--disable-socket-quota";
     }
     args[n++] = confname;
     args[n] = NULL;
@@ -7647,6 +7770,8 @@ watch_files_in(void)
     WATCH(options.guest_file[n]);
     WATCH(options.who_file[n]);
   }
+  
+  WATCH(options.index_html);
 
   for (h = hash_firstentry(&help_files); h; h = hash_nextentry(&help_files))
     WATCH(h->file);
