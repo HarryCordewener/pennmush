@@ -1,6 +1,6 @@
 % PennMUSH 1.8.8 Changes
 %
-% Last release: ??? ?? 2018
+% Last release: Apr 20 2020
 
 This is the most current changes file for PennMUSH. Please look it over; each version contains new things which might significantly affect the function of your server.  Changes are reported in reverse chronological order (most recent first)
 
@@ -17,7 +17,7 @@ Numbers next to the developer credit refer to Github issue numbers.
 
 -------------------------------------------------------------------------------
 
-Version 1.8.8 patchlevel 0 ??? ?? 2019
+Version 1.8.8 patchlevel 0 Apr 20 2020
 ======================================
 
 WARNING! With the removal of the object queue, please be careful when upgrading that you do not have any infinitely looping triggers without an @wait.
@@ -47,12 +47,13 @@ Minor Changes
 * Wildcard patterns are sometimes converted to regular expressions when matched against many strings. [SW]
 * Add '--disable-socket-quota' option for our test suite. [GM]
 * The list of color definitions used with `ansi()`, `colors()`, etc. is now kept in game/txt/colors.json. [SW]
-* Sqlite3 updated to 3.28. Biggest user-visible change is support for window functions. [SW]
+* Sqlite3 updated to 3.29. Biggest user-visible change is support for window functions. [SW]
 * Update cJSON to 1.7.10 [SW]
 * @command/restrict will only clear the failure message if a new one is supplied. [MT]
 * @SOCKSET now has a NOQUOTA option which causes that socket to be given the max command input quota per refresh. [MT]
 * --disable-socket-quota is now preserved across reboots. [MT]
 * Improved detection of an already running game. [SW]
+* Support logging through the OS syslog facility. [SW]
 
 Softcode
 --------
@@ -72,3 +73,5 @@ Fixes
 * Fix a file descriptor leak caused by recent OpenSSL versions. [SW]
 * Added GAGGED restrictions that were missing from a few commands, including `@message` and the MUXcomm aliases. [MG]
 * Minor help updates, including clarification of what GAGGED blocks, suggested by Merit. [#1262, MG, MT]
+* Some fixes to extmail.c and chunk.c to fix @mail going forward. [GM]
+* switch() and floating point numbers not working as intended. Reported by Mercutio [#1325, MT]
