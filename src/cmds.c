@@ -25,9 +25,7 @@
 #include <ws2tcpip.h>
 #endif
 
-#ifdef HAVE_LIBCURL
 #include "http.h"
-#endif
 
 #include "access.h"
 #include "ansi.h"

@@ -12,8 +12,8 @@
 #include <string.h>
 #include <ctype.h>
 
-#ifdef HAVE_LIBCURL
 #include "http.h"
+#ifdef HAVE_LIBCURL
 #include <mysocket.h>
 #endif
 

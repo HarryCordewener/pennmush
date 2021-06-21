@@ -73,9 +73,7 @@
 #ifdef HAVE_POLL_H
 #include <poll.h>
 #endif
-#ifdef HAVE_LIBCURL
 #include "http.h"
-#endif
 #include <openssl/rand.h>
 
 #include "access.h"
