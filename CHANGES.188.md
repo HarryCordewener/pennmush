@@ -32,6 +32,8 @@ Fixes
 -----
 * `udefault` only accepted 12 arguments, not the documented 32. [MG]
 * ``MOGRIFY`FORMAT`` was not being passed the mogrified channel name from ``MOGRIFY`CHANNAME`` as it should. Reported by Xperta [MT]
+* Fixed `MAX_COMMAND_LEN` alteration support, by improving the stability of the chunk system. Patch by Mercutio. [1336]
+
 * Allow all json functions to translate markup characters during unescape sequences, if json_unsafe_unescape is set to 1. Patch by Mercutio.
 
 Softcode
