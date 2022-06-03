@@ -1665,30 +1665,29 @@ FUNCTION(fun_benchmark)
 /* ARGSUSED */
 FUNCTION(fun_http)
 {
-  #ifdef HAVE_LIBCURL
+#ifdef HAVE_LIBCURL
   ufun_attrib ufun;
   extern int ncurl_queries;
   CURLcode curl_status;
   struct urlreq *req;
   CURL *handle;
   struct curl_slist *headers = NULL;
-  dbref thing;
-  char *s;
   const char *userpass;
-  char tbuf[BUFFER_LEN];
   enum http_verb verb = HTTP_GET;
+  unsigned int i;
+  unsigned int http_verb_cnt;
 
   if (!Wizard(executor) && !has_power_by_name(executor, "Can_HTTP", NOTYPE)) {
     safe_str(T("#-1 PERMISSION DENIED."), buff, bp);
     return;
   }
   
-  if(nargs < 3) {
+  if (nargs < 3) {
     safe_str(T("#-1 FUNCTION EXPECTS AT LEAST 3 ARGUMENTS"), buff, bp);
     return;
   }
   
-  if(nargs > 4) {
+  if (nargs > 4) {
     safe_str(T("#-1 FUNCTION EXPECTS AT MOST 4 ARGUMENTS"), buff, bp);
     return;
   }
@@ -1698,49 +1697,30 @@ FUNCTION(fun_http)
     return;
   }
 
-  for(unsigned int i = 0; i < sizeof(http_verb_name); i++)
+  http_verb_cnt = sizeof(http_verb_name)/sizeof(http_verb_name[0]);
+  for(i = 0; i < http_verb_cnt; i++)
   {
-    if(strcasecmp(args[1], http_verb_name[i]) == 0) {
+    if (strcasecmp(args[1], http_verb_name[i]) == 0) {
       verb = i;
       break;
     }
   }
 
-  if(verb == HTTP_GET && nargs > 3) {
+  if (verb == HTTP_GET && nargs > 3) {
     safe_str(T("#-1 A GET REQUEST DOES NOT SUPPORT A BODY ARGUMENT."), buff, bp);
-    return;
-  }
-
-  mush_strncpy(tbuf, args[0], sizeof tbuf);
-  s = strchr(tbuf, '/');
-  if (!s) {
-    safe_str(T("#-1 I NEED TO KNOW WHAT ATTRIBUTE TO TRIGGER"), buff, bp);
-    return;
-  }
-  *(s++) = '\0';
-  upcasestr(s);
-
-  thing = noisy_match_result(executor, tbuf, NOTYPE, MAT_EVERYTHING);
-
-  if (thing == NOTHING) {
-    return;
-  }
-
-  if (!controls(executor, thing)) {
-    safe_str(T("#-1 PERMISSION DENIED"), buff, bp);
     return;
   }
   
   if (!fetch_ufun_attrib(args[0], executor, &ufun, UFUN_DEFAULT))
   {
-    safe_str(T("#-1 Invalid attribute to call"), buff, bp);
+    safe_str(T(ufun.errmess), buff, bp);
     return;
   }
 
   req = mush_malloc(sizeof *req, "urlreq");
   req->enactor = enactor;
-  req->thing = thing;
-  req->attrname = mush_strdup(s, "urlreq.attrname");
+  req->thing = ufun.thing;
+  req->attrname = mush_strdup(ufun.attrname, "urlreq.attrname");
   req->body = sqlite3_str_new(NULL);
   req->too_big = 0;
   req->pe_regs = pe_regs_create(PE_REGS_ARG | PE_REGS_Q, "fun_http");
@@ -1775,10 +1755,8 @@ FUNCTION(fun_http)
 
     if (verb == HTTP_POST) {
       curl_easy_setopt(handle, CURLOPT_POST, 1);
-    } else if (verb == HTTP_PUT) {
-      curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, "PUT");
-    } else if (verb == HTTP_DELETE ) {
-      curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, "DELETE");
+    } else {
+      curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, http_verb_name[verb]);
     }
 
     postdata = nargs > 3 && (bool)*args[3];
@@ -1810,9 +1788,10 @@ FUNCTION(fun_http)
 
   curl_status = curl_easy_perform(handle);
   
-  if (curl_status == CURLM_OK) {
+  if (curl_status == CURLE_OK) {
     long respcode;
     char *contenttype;
+    char rbuff[BUFFER_LEN];
     struct urlreq *resp;
     bool is_utf8 = 0;
 
@@ -1835,7 +1814,6 @@ FUNCTION(fun_http)
         }
       }
       if (resp->body && sqlite3_str_length(resp->body) > 0) {
-        char rbuff[BUFFER_LEN];
         char *body = NULL;
         char *latin1 = NULL;
         int len;
@@ -1856,9 +1834,6 @@ FUNCTION(fun_http)
           }
         }
         pe_regs_setenv(resp->pe_regs, 0, latin1);
-
-        call_ufun(&ufun, rbuff, executor, enactor, pe_info, resp->pe_regs);
-        safe_str(rbuff, buff, bp);
         
         if (is_utf8) {
           mush_free(latin1, "string.httpfun.received");
@@ -1871,6 +1846,10 @@ FUNCTION(fun_http)
         pe_regs_set_int(pe_info->regvals, PE_REGS_Q, "http-overflow", 1);
         notify(resp->thing, T("Too much HTTP data received; excess truncated."));
       }
+
+      call_ufun(&ufun, rbuff, executor, enactor, pe_info, resp->pe_regs);
+      safe_str(rbuff, buff, bp);
+
     } else {
       pe_regs_set(pe_info->regvals, PE_REGS_Q, "http-error", curl_easy_strerror(curl_status));
     }
