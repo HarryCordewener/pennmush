@@ -3148,16 +3148,18 @@ FUNCTION(fun_oob)
 {
   dbref who;
   DESC *d;
-  cJSON *json;
+  cJSON *json = NULL;
   int i = 0;
   const char *l = NULL;
   char *p;
   int failed = 0;
 
-  json = cJSON_Parse(args[2]);
-  if (!json) {
-    safe_str(T("#-1 INVALID JSON"), buff, bp);
-    return;
+  if (nargs > 2 && arglens[2]) {
+    json = cJSON_Parse(args[2]);
+    if (!json) {
+      safe_str(T("#-1 INVALID JSON"), buff, bp);
+      return;
+    }
   }
 
   l = trim_space_sep(args[0], ' ');
@@ -3178,7 +3180,7 @@ FUNCTION(fun_oob)
     DESC_ITER_CONN (d) {
       if (d->player != who)
         continue;
-      if (d->conn_flags & CONN_WEBSOCKETS) {
+      if (json && d->conn_flags & CONN_WEBSOCKETS) {
         send_websocket_object(d, args[1], json);
         i++;
       }
@@ -3195,7 +3197,9 @@ FUNCTION(fun_oob)
     safe_integer(i, buff, bp);
   }
 
-  cJSON_Delete(json);
+  if (json) {
+    cJSON_Delete(json);
+  }
 }
 
 void
